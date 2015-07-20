@@ -1,15 +1,17 @@
 package kitty2;
 
 import com.sun.jna.Native;
-import com.sun.jna.Pointer;
-import com.sun.jna.platform.win32.Kernel32;
-import com.sun.jna.platform.win32.WinBase;
 import com.sun.jna.platform.win32.WinDef;
-import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.platform.win32.WinUser;
-import com.sun.jna.ptr.IntByReference;
-import com.sun.jna.win32.StdCallLibrary;
+import java.awt.BorderLayout;
 import java.awt.Dimension;
+import java.awt.GridLayout;
+import java.awt.Image;
+import java.awt.Insets;
+import java.awt.MouseInfo;
+import java.awt.Point;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
@@ -24,105 +26,142 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.prefs.BackingStoreException;
+import java.util.prefs.Preferences;
+import javax.swing.ImageIcon;
+import javax.swing.JButton;
+import javax.swing.JFileChooser;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
+import javax.swing.WindowConstants;
 import mydocking.Tab;
-import mydocking.TabColors;
+import mydocking.TabContainer;
+import mydocking.TabManager;
 
 public class MainFrame extends javax.swing.JFrame {
 
-   // title 
-   // desni klik
-   // ugasena aplikaicja
-   // glass frame for focus
    private static boolean errorDialogShown = false;
    private final User32 user32 = User32.INSTANCE;
    private final int CUSTOM_MENU_FIRST_ID = 0xFFFF;
-   private int CUSTOM_MENU_CURRENT_ID = CUSTOM_MENU_FIRST_ID;
+   private int CUSTOM_MENU_LAST_ID = CUSTOM_MENU_FIRST_ID;
    private final Map<Integer, CustomMenuActionListener> mapCustomMenuHandlers = new HashMap<>();
-   private final String kittyHome = "C:\\Users\\vanja\\Desktop\\KiTTY";
+   private int sessionsSeparatorPos = 0;
+   private Preferences pref;
+   private String kittyHome;
+   private int setKittyHomeOption;
+   private mydocking.TabManager tabManager;
 
    public MainFrame() {
-      initComponents();
+      tabManager = new TabManager();
+      setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+      setTitle("KiTTY2");
+      getContentPane().setLayout(new GridLayout(1, 1));
+      getContentPane().add(tabManager);
+      setBounds(0, 0, 1000, 600);
+
+      List<Image> icons = new ArrayList<>();
+      icons.add(new ImageIcon(getClass().getResource("/kitty2/images/kitty_portable_16.png")).getImage());
+      icons.add(new ImageIcon(getClass().getResource("/kitty2/images/kitty_portable_32.png")).getImage());
+      icons.add(new ImageIcon(getClass().getResource("/kitty2/images/kitty_portable_48.png")).getImage());
+      icons.add(new ImageIcon(getClass().getResource("/kitty2/images/kitty_portable_256.png")).getImage());
+      setIconImages(icons);
+
+      pref = Preferences.userNodeForPackage(MainFrame.class);
+      kittyHome = pref.get("kittyHome", "");
+      if (kittyHome.isEmpty()) {
+         kittyHome = showKittyHomeDialog("");
+         if (kittyHome != null) {
+            pref.put("kittyHome", kittyHome);
+            try {
+               pref.flush();
+            } catch (BackingStoreException ex) {
+               throw new RuntimeException("Can't save settings!", ex);
+            }
+         } else {
+            kittyHome = "";
+         }
+      }
 
       addWindowListener(new WindowAdapter() {
          @Override
          public void windowOpened(WindowEvent e) {
             try {
-               File f = new File(kittyHome);
-               if (f.isDirectory()) {
-                  for (File listFile : f.listFiles()) {
-                     if (listFile.isDirectory() && "Sessions".equals(listFile.getName())) {
-                        System.out.println("krece " + listFile);
-                        WinDef.HWND hwnd = new WinDef.HWND(Native.getWindowPointer(MainFrame.this));
-                        WinDef.HMENU systemMenu = user32.GetSystemMenu(hwnd, new WinDef.BOOL(0));
-                        int pos = loadSessions(systemMenu, mapCustomMenuHandlers, "", listFile, 0);
-                        WinUtil.InsertMenuSeparator(systemMenu, pos, ++CUSTOM_MENU_CURRENT_ID);
+               WinDef.HWND hwnd = new WinDef.HWND(Native.getWindowPointer(MainFrame.this));
+               WinDef.HMENU systemMenu = user32.GetSystemMenu(hwnd, new WinDef.BOOL(0));
+               File kittyHomeFile = new File(kittyHome);
+               if (kittyHomeFile.isDirectory()) {
+                  for (File sessions : kittyHomeFile.listFiles()) {
+                     if (sessions.isDirectory() && "Sessions".equals(sessions.getName())) {
+                        sessionsSeparatorPos = loadSessions(systemMenu, mapCustomMenuHandlers, "", sessions, 0);
+                        if (sessionsSeparatorPos > 0) {
+                           WinUtil.InsertMenuSeparator(systemMenu, sessionsSeparatorPos, ++CUSTOM_MENU_LAST_ID);
+                        }
                      }
                   }
                }
-
-               WinDef.HWND hwnd = new WinDef.HWND(Native.getWindowPointer(MainFrame.this));
+               int nextPos = sessionsSeparatorPos;
+               if (nextPos > 0) {
+                  nextPos++;
+               }
+               setKittyHomeOption = ++CUSTOM_MENU_LAST_ID;
+               WinUtil.InsertMenuItem(systemMenu, nextPos++, setKittyHomeOption, "Set KiTTY home");
+               WinUtil.InsertMenuSeparator(systemMenu, nextPos, ++CUSTOM_MENU_LAST_ID);
                user32.SetWindowLongPtr(hwnd, User32.GWLP_WNDPROC, new WinUtil.WindowProcCallback(hwnd) {
                   @Override
                   public WinDef.LRESULT callback(WinDef.HWND hwnd, WinDef.UINT Msg, WinDef.WPARAM wParam, WinDef.LPARAM lParam) {
-                     if (WinUser.WM_SYSCOMMAND == Msg.intValue()) {
+                     if (Msg.intValue() == WinUser.WM_SYSCOMMAND) {
                         if (mapCustomMenuHandlers.containsKey(wParam.intValue())) {
                            CustomMenuActionListener act = mapCustomMenuHandlers.get(wParam.intValue());
                            if (act != null) {
                               act.actionPerformed();
                            }
                            return new WinDef.LRESULT(0);
+                        } else if (wParam.intValue() == setKittyHomeOption) {
+                           SwingUtilities.invokeLater(new Runnable() {
+                              @Override
+                              public void run() {
+                                 kittyHome = showKittyHomeDialog(kittyHome);
+                                 reloadSessions();
+                              }
+                           });
                         }
+                     } else if (Msg.intValue() == User32.WM_USER.intValue()) {
+                        if (wParam.intValue() == 0) {
+                           Tab tab = TabContainer.getTab(Integer.toString(lParam.intValue()));
+                           if (tab != null) {
+                              WinDef.HWND kittyHwnd = ((KittyPanel) tab.getComponent()).getKittyHwnd();
+                              WinDef.HMENU popup = user32.GetSystemMenu(kittyHwnd, new WinDef.BOOL(0));
+                              Point pointTmp = MouseInfo.getPointerInfo().getLocation();
+                              SwingUtilities.convertPointFromScreen(pointTmp, MainFrame.this.getContentPane());
+                              WinDef.POINT point = new WinDef.POINT(pointTmp.x, pointTmp.y);
+                              user32.ClientToScreen(hwnd, point);
+                              WinDef.BOOL command = User32.INSTANCE.TrackPopupMenu(popup, WinUtil.orUINT(User32.TPM_RETURNCMD, User32.TPM_NONOTIFY, User32.TPM_RIGHTBUTTON), point.x, point.y, 0, hwnd, null);
+                              if (command.booleanValue()) {
+                                 user32.PostMessage(kittyHwnd, new WinDef.UINT(WinUser.WM_SYSCOMMAND), new WinDef.WPARAM(command.longValue()), new WinDef.LPARAM(0));
+                              }
+                           }
+                        }
+                        return new WinDef.LRESULT(0);
                      }
-
                      return super.callback(hwnd, Msg, wParam, lParam);
                   }
                });
             } catch (UnsupportedEncodingException ex) {
-               throw new RuntimeException("Erro in startup", ex);
+               throw new RuntimeException("Error in startup!", ex);
             }
          }
       });
    }
 
-   @SuppressWarnings("unchecked")
-   // <editor-fold defaultstate="collapsed" desc="Generated Code">//GEN-BEGIN:initComponents
-   private void initComponents() {
-
-      tabManager1 = new mydocking.TabManager();
-
-      setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
-      setTitle("KiTTY2");
-
-      tabManager1.setBorder(javax.swing.BorderFactory.createLineBorder(new java.awt.Color(0, 0, 0), 3));
-
-      javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
-      getContentPane().setLayout(layout);
-      layout.setHorizontalGroup(
-         layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-         .addGroup(layout.createSequentialGroup()
-            .addGap(34, 34, 34)
-            .addComponent(tabManager1, javax.swing.GroupLayout.DEFAULT_SIZE, 876, Short.MAX_VALUE)
-            .addGap(74, 74, 74))
-      );
-      layout.setVerticalGroup(
-         layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-         .addGroup(layout.createSequentialGroup()
-            .addGap(39, 39, 39)
-            .addComponent(tabManager1, javax.swing.GroupLayout.DEFAULT_SIZE, 423, Short.MAX_VALUE)
-            .addGap(99, 99, 99))
-      );
-
-      setBounds(0, 0, 1000, 600);
-   }// </editor-fold>//GEN-END:initComponents
-
-   private int loadSessions(WinDef.HMENU menu, Map<Integer, CustomMenuActionListener> mmm, final String folder, File directory, int pos) throws UnsupportedEncodingException {
-      List<File> filesss = new ArrayList<>(Arrays.asList(directory.listFiles()));
-      Collections.sort(filesss, new Comparator<File>() {
+   private int loadSessions(WinDef.HMENU menu, Map<Integer, CustomMenuActionListener> mapListeners, String currentFolder, File root, int position) throws UnsupportedEncodingException {
+      List<File> files = new ArrayList<>(Arrays.asList(root.listFiles()));
+      Collections.sort(files, new Comparator<File>() {
          @Override
          public int compare(File o1, File o2) {
             if (o1.isDirectory() && o2.isFile()) {
@@ -135,101 +174,90 @@ public class MainFrame extends javax.swing.JFrame {
          }
       });
 
-      for (final File listFile : filesss) {
-         if (listFile.isFile()) {
-            final String text = URLDecoder.decode(listFile.getName(), "cp1252");
+      for (File file : files) {
+         String text = URLDecoder.decode(file.getName(), "cp1252");
+         if (file.isFile()) {
             if ("Default Settings".equals(text)) {
                continue;
             }
-            CUSTOM_MENU_CURRENT_ID++;
-            mmm.put(CUSTOM_MENU_CURRENT_ID, new CustomMenuActionListener() {
+            mapListeners.put(++CUSTOM_MENU_LAST_ID, new CustomMenuActionListener() {
                @Override
                public void actionPerformed() {
-                  String folderparam = " ";
-                  if (folder.length() > 1) {
-                     folderparam = " -folder \"" + folder.substring(1) + "\"";
-                  }
-
-                  String command = kittyHome + "\\kitty_portable.exe" + folderparam + " -load \"" + text + "\"";
-
-                  WinBase.STARTUPINFO startupInfo = new WinBase.STARTUPINFO();
-                  final WinBase.PROCESS_INFORMATION processInformation = new WinBase.PROCESS_INFORMATION();
-
-                  //Kernel32.INSTANCE.CreateProcess(null, command, null, null, false, new WinDef.DWORD(WinBase.DETACHED_PROCESS), null, kittyHome, startupInfo, processInformation);
-                  Kernel32.INSTANCE.CreateProcess(null, command, null, null, false, new WinDef.DWORD(0), null, kittyHome, startupInfo, processInformation);
-
-                  long l = System.currentTimeMillis();
-                  WinDef.DWORD result = user32.WaitForInputIdle(processInformation.hProcess, new WinDef.DWORD(2000));
-                  System.out.println("elapsed " + (System.currentTimeMillis() - l));
-                  System.out.println("result=" + result);
-                  if (result.intValue() != 0) {
-                     throw new RuntimeException("cannot start process WaitForInputIdle=" + result.intValue());
-                  }
-                  System.out.println(kittyHome + "\\kitty_portable.exe" + folderparam + " -load \"" + text + "\"");
-                  System.out.println(processInformation.dwProcessId);
-                  System.out.println(Pointer.nativeValue(processInformation.hProcess.getPointer()));
-
-                  com.sun.jna.platform.win32.User32.INSTANCE.EnumWindows(new WinUser.WNDENUMPROC() {
-
-                     @Override
-                     public boolean callback(WinDef.HWND hWnd, Pointer data) {
-                        IntByReference i = new IntByReference();
-                        com.sun.jna.platform.win32.User32.INSTANCE.GetWindowThreadProcessId(hWnd, i);
-                        //System.out.println("enum="+i.getValue());
-                        if (processInformation.dwProcessId.intValue() == i.getValue()) {
-                           //System.out.println("MATCHHHHHHHHHHHHHHH");
-
-                           final KittyPanel kp = new KittyPanel(hWnd);
-                           final String title = kp.getTitle();
-                           System.out.println(title);
-
-                           SwingUtilities.invokeLater(new Runnable() {
-
-                              @Override
-                              public void run() {
-                                 final Tab tab = tabManager1.addNewTab(title, kp, TabColors.PURPLE);
-
-                                 kp.take();
-
-                              }
-                           });
-
-                           WinNT.HANDLE hl = user32.SetWinEventHook(new WinDef.UINT(0x800C), new WinDef.UINT(0x800C), null, new StdCallLibrary.StdCallCallback() {
-                              public void callback(WinNT.HANDLE hWinEventHook, WinDef.DWORD event, WinDef.HWND hwnd, long idObject, long idChild, WinDef.DWORD dwEventThread, WinDef.DWORD dwmsEventTime) {
-                                 System.out.println("callback " + idObject + "     " + idChild);
-                                 if (idObject == 0) {
-                                    char[] buf = new char[com.sun.jna.platform.win32.User32.INSTANCE.GetWindowTextLength(hwnd) + 1];
-                                    int l = com.sun.jna.platform.win32.User32.INSTANCE.GetWindowText(hwnd, buf, buf.length);
-                                    String newTitle = new String(buf, 0, l);
-                                    System.out.println(newTitle);
-                                    //tab.setTitle(newTitle);
-                                 }
-                              }
-                           }, processInformation.dwProcessId, processInformation.dwThreadId, new WinDef.UINT(0));
-
-                           //kp.take();
-                           return false;
-                        }
-                        return true;
-                     }
-                  }, Pointer.NULL);
-
+                  new KittyPanel(tabManager, kittyHome, (currentFolder.length() > 1) ? (" -folder \"" + currentFolder.substring(1) + "\"") : "", " -load \"" + text + "\"");
                }
             });
-
-            //System.out.println("adding " + pos + "    " + CUSTOM_MENU_CURRENT_ID + "    " + text);
-            WinUtil.InsertMenuItem(menu, pos, CUSTOM_MENU_CURRENT_ID, text);
-            pos++;
-         } else if (listFile.isDirectory()) {
-            final String text = URLDecoder.decode(listFile.getName(), "cp1252");
+            WinUtil.InsertMenuItem(menu, position++, CUSTOM_MENU_LAST_ID, text);
+         } else if (file.isDirectory()) {
             WinDef.HMENU popup = user32.CreatePopupMenu();
-            loadSessions(popup, mmm, folder + "\\" + text, listFile, 0);
-            WinUtil.InsertMenuPopup(menu, pos, popup, text);
-            pos++;
+            loadSessions(popup, mapListeners, currentFolder + "\\" + text, file, 0);
+            WinUtil.InsertMenuPopup(menu, position++, popup, text);
          }
-
       }
-      return pos;
+
+      return position;
+   }
+
+   private void reloadSessions() {
+      WinDef.HWND hwnd = new WinDef.HWND(Native.getWindowPointer(MainFrame.this));
+      WinDef.HMENU systemMenu = user32.GetSystemMenu(hwnd, new WinDef.BOOL(0));
+      if (sessionsSeparatorPos > 0) {
+         for (int i = sessionsSeparatorPos; i >= 0; i--) {
+            user32.DeleteMenu(systemMenu, new WinDef.UINT(i), User32.MF_BYPOSITION);
+         }
+      }
+      mapCustomMenuHandlers.clear();
+      sessionsSeparatorPos = 0;
+      try {
+         File kittyHomeFile = new File(kittyHome);
+         if (kittyHomeFile.isDirectory()) {
+            for (File sessions : kittyHomeFile.listFiles()) {
+               if (sessions.isDirectory() && "Sessions".equals(sessions.getName())) {
+                  sessionsSeparatorPos = loadSessions(systemMenu, mapCustomMenuHandlers, "", sessions, 0);
+                  if (sessionsSeparatorPos > 0) {
+                     WinUtil.InsertMenuSeparator(systemMenu, sessionsSeparatorPos, ++CUSTOM_MENU_LAST_ID);
+                  }
+               }
+            }
+         }
+      } catch (UnsupportedEncodingException ex) {
+         throw new RuntimeException("Error reloading esssions!", ex);
+      }
+   }
+
+   private String showKittyHomeDialog(String startValue) {
+      JPanel panel = new JPanel(new BorderLayout(6, 6));
+      JLabel label = new JLabel("Choose the directory where kitty_portable.exe is located:");
+      panel.add(label, BorderLayout.NORTH);
+      JTextField jtf = new JTextField(startValue);
+      jtf.setPreferredSize(new Dimension(300, jtf.getPreferredSize().height));
+      panel.add(jtf, BorderLayout.CENTER);
+      JButton button = new JButton("...");
+      button.setMargin(new Insets(2, 3, 2, 2));
+      button.addActionListener(new ActionListener() {
+         @Override
+         public void actionPerformed(ActionEvent e) {
+            JFileChooser jfc = new JFileChooser(new File(jtf.getText()));
+            jfc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if (jfc.showOpenDialog(MainFrame.this) == JFileChooser.APPROVE_OPTION) {
+               jtf.setText(jfc.getSelectedFile().getAbsolutePath());
+            }
+         }
+      });
+      panel.add(button, BorderLayout.EAST);
+
+      if (JOptionPane.showOptionDialog(
+            this,
+            panel,
+            "Set KiTTY home",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            new Object[]{"Save", "Cancel"},
+            null
+      ) == 0) {
+         return jtf.getText();
+      }
+      return null;
    }
 
    public static void main(String args[]) {
@@ -287,8 +315,4 @@ public class MainFrame extends javax.swing.JFrame {
          }
       });
    }
-
-   // Variables declaration - do not modify//GEN-BEGIN:variables
-   private mydocking.TabManager tabManager1;
-   // End of variables declaration//GEN-END:variables
 }

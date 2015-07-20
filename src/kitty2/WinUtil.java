@@ -17,15 +17,15 @@ public class WinUtil {
       return new WinDef.UINT(or);
    }
 
-   static void InsertMenuSeparator(WinDef.HMENU menu, int position, int id) {
+   public static void InsertMenuSeparator(WinDef.HMENU menu, int position, int id) {
       user32.InsertMenu(menu, new WinDef.UINT(position), WinUtil.orUINT(User32.MF_BYPOSITION, User32.MF_SEPARATOR), new WinDef.UINT_PTR(id), "");
    }
 
-   static void InsertMenuItem(WinDef.HMENU menu, int position, int id, String text) {
+   public static void InsertMenuItem(WinDef.HMENU menu, int position, int id, String text) {
       user32.InsertMenu(menu, new WinDef.UINT(position), WinUtil.orUINT(User32.MF_BYPOSITION, User32.MF_STRING), new WinDef.UINT_PTR(id), text);
    }
 
-   static void InsertMenuPopup(WinDef.HMENU menu, int position, WinDef.HMENU popup, String text) {
+   public static void InsertMenuPopup(WinDef.HMENU menu, int position, WinDef.HMENU popup, String text) {
       user32.InsertMenu(menu, new WinDef.UINT(position), WinUtil.orUINT(User32.MF_BYPOSITION, User32.MF_POPUP), new WinDef.UINT_PTR(Pointer.nativeValue(popup.getPointer())), text);
    }
 
@@ -40,5 +40,11 @@ public class WinUtil {
       public WinDef.LRESULT callback(WinDef.HWND hwnd, WinDef.UINT Msg, WinDef.WPARAM wParam, WinDef.LPARAM lParam) {
          return user32.CallWindowProc(previousProcPtr, hwnd, Msg, wParam, lParam);
       }
+   }
+
+   public static String getWindowTitle(WinDef.HWND hwnd) {
+      char[] buf = new char[user32.GetWindowTextLength(hwnd) + 1];
+      int len = user32.GetWindowText(hwnd, buf, buf.length);
+      return new String(buf, 0, len);
    }
 }
